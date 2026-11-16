@@ -1,7 +1,6 @@
 package equipment_editor;
 
 import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
@@ -11,14 +10,15 @@ import net.neoforged.fml.loading.FMLPaths;
 import org.slf4j.Logger;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.Reader;
-import java.io.Writer;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -31,9 +31,12 @@ public final class EquipmentConfig {
     static final Logger LOGGER = LogUtils.getLogger();
 
     public static final Path CONFIG_PATH = FMLPaths.CONFIGDIR.get().resolve("equipment_editor.json");
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final Set<String> RULE_KEYS = Arrays.stream(Rule.class.getFields())
+    private static final String EXAMPLE_RESOURCE = "/equipment_editor-example.json";
+    private static final Gson GSON = new Gson();
+    private static final List<Field> RULE_FIELDS = Arrays.stream(Rule.class.getFields())
         .filter(field -> !Modifier.isStatic(field.getModifiers()))
+        .toList();
+    private static final Set<String> RULE_KEYS = RULE_FIELDS.stream()
         .map(Field::getName)
         .collect(Collectors.toUnmodifiableSet());
 
@@ -41,19 +44,15 @@ public final class EquipmentConfig {
 
     public static void load() {
         try {
-            if (!Files.exists(CONFIG_PATH)) {
-                RULES = defaultRules();
-                save();
-            } else {
-                try (Reader reader = Files.newBufferedReader(CONFIG_PATH)) {
-                    JsonElement json = JsonParser.parseReader(reader);
-                    if (!json.isJsonObject()) {
-                        throw new JsonParseException("Expected an object with a \"rules\" array");
-                    }
-                    warnUnknownKeys(json.getAsJsonObject());
-                    ConfigFile config = GSON.fromJson(json, ConfigFile.class);
-                    RULES = config == null || config.rules == null ? new ArrayList<>() : config.rules;
+            if (!Files.exists(CONFIG_PATH)) writeExample();
+            try (Reader reader = Files.newBufferedReader(CONFIG_PATH)) {
+                JsonElement json = JsonParser.parseReader(reader);
+                if (!json.isJsonObject()) {
+                    throw new JsonParseException("Expected an object with a \"rules\" array");
                 }
+                warnUnknownKeys(json.getAsJsonObject());
+                ConfigFile config = GSON.fromJson(json, ConfigFile.class);
+                RULES = config == null || config.rules == null ? new ArrayList<>() : config.rules;
             }
         } catch (Exception e) {
             LOGGER.error("Could not load {}", CONFIG_PATH, e);
@@ -62,14 +61,12 @@ public final class EquipmentConfig {
         EquipmentModifier.rebuildRuleIndex();
     }
 
-    public static void save() {
-        try {
-            Files.createDirectories(CONFIG_PATH.getParent());
-            try (Writer writer = Files.newBufferedWriter(CONFIG_PATH)) {
-                GSON.toJson(new ConfigFile(RULES), writer);
-            }
-        } catch (IOException e) {
-            LOGGER.error("Could not save {}", CONFIG_PATH, e);
+    /** A missing config starts as a copy of the example bundled in the jar. */
+    private static void writeExample() throws IOException {
+        Files.createDirectories(CONFIG_PATH.getParent());
+        try (InputStream example = EquipmentConfig.class.getResourceAsStream(EXAMPLE_RESOURCE)) {
+            if (example == null) throw new IOException("Bundled " + EXAMPLE_RESOURCE + " is missing");
+            Files.copy(example, CONFIG_PATH);
         }
     }
 
@@ -90,25 +87,8 @@ public final class EquipmentConfig {
         }
     }
 
-    private static List<Rule> defaultRules() {
-        List<Rule> rules = new ArrayList<>();
-        Rule sword = new Rule(List.of("minecraft:diamond_sword"));
-        sword.durability = 2500;
-        sword.attackDamage = 10.0;
-        sword.attackSpeed = 1.8;
-        rules.add(sword);
-
-        Rule chestplate = new Rule(List.of("minecraft:diamond_chestplate"));
-        chestplate.durability = 1000;
-        chestplate.armor = 10.0;
-        chestplate.armorToughness = 5.0;
-        rules.add(chestplate);
-        return rules;
-    }
-
-    public static final class ConfigFile {
-        public List<Rule> rules;
-        public ConfigFile(List<Rule> rules) { this.rules = rules; }
+    private static final class ConfigFile {
+        List<Rule> rules;
     }
 
     public static final class Rule {
@@ -132,7 +112,18 @@ public final class EquipmentConfig {
         public Double durabilityMultiplier;
         public Map<String, Double> attributes = new HashMap<>();
 
-        public Rule(List<String> items) { this.items = items; }
-        public Rule() {}
+        /** Copies every value set on {@code source} over this rule's; attribute maps are combined. */
+        void mergeFrom(Rule source) {
+            try {
+                for (Field field : RULE_FIELDS) {
+                    Object value = field.get(source);
+                    if (value == null || value instanceof Collection || value instanceof Map) continue;
+                    field.set(this, value);
+                }
+            } catch (IllegalAccessException e) {
+                throw new IllegalStateException(e);
+            }
+            if (source.attributes != null) attributes.putAll(source.attributes);
+        }
     }
 }

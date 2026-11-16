@@ -10,6 +10,7 @@ public final class EquipmentEditorMod {
 
     public EquipmentEditorMod(IEventBus modBus) {
         EquipmentConfig.load();
+        modBus.addListener(EquipmentModifier::modifyDefaultComponents);
         NeoForge.EVENT_BUS.addListener(EquipmentModifier::modifyAttributes);
         NeoForge.EVENT_BUS.addListener(EquipmentModifier::modifyMiningSpeed);
     }

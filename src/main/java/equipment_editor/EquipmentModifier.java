@@ -19,8 +19,6 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Rarity;
 import net.minecraft.world.item.component.Tool;
 import net.minecraft.world.item.component.Unbreakable;
-import net.neoforged.bus.api.SubscribeEvent;
-import net.neoforged.fml.common.EventBusSubscriber;
 import net.neoforged.neoforge.event.ItemAttributeModifierEvent;
 import net.neoforged.neoforge.event.ModifyDefaultComponentsEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
@@ -34,19 +32,18 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-@EventBusSubscriber(modid = EquipmentEditorMod.MOD_ID, bus = EventBusSubscriber.Bus.MOD)
 public final class EquipmentModifier {
     private static final Logger LOGGER = EquipmentConfig.LOGGER;
     private static final String NAMESPACE = EquipmentEditorMod.MOD_ID;
     private static final String VANILLA_NAMESPACE = "minecraft";
     private static final int MAX_STACK_SIZE = 99;
 
-    private static Map<String, EquipmentConfig.Rule> itemRules = Map.of();
+    private static Map<ResourceLocation, EquipmentConfig.Rule> itemRules = Map.of();
 
     private EquipmentModifier() {}
 
     static void rebuildRuleIndex() {
-        Map<String, EquipmentConfig.Rule> items = new HashMap<>();
+        Map<ResourceLocation, EquipmentConfig.Rule> items = new HashMap<>();
 
         for (EquipmentConfig.Rule rule : EquipmentConfig.RULES) {
             if (rule == null || rule.items == null) continue;
@@ -58,32 +55,30 @@ public final class EquipmentModifier {
                     LOGGER.warn("Invalid item ID \"{}\" in rules is ignored", item);
                     continue;
                 }
-                // Key by the canonical ID so "diamond_sword" and "minecraft:diamond_sword" match.
-                items.merge(id.toString(), rule, EquipmentModifier::mergeRules);
+                // Keyed by the parsed ID, so "diamond_sword" and "minecraft:diamond_sword" match.
+                items.merge(id, rule, EquipmentModifier::mergeRules);
             }
         }
 
         itemRules = Map.copyOf(items);
     }
 
-    @SubscribeEvent
     public static void modifyDefaultComponents(ModifyDefaultComponentsEvent event) {
         Set<EquipmentConfig.Rule> checkedAttributes = Collections.newSetFromMap(new IdentityHashMap<>());
 
-        itemRules.forEach((itemId, rule) -> {
-            ResourceLocation id = ResourceLocation.parse(itemId);
+        itemRules.forEach((id, rule) -> {
             if (!BuiltInRegistries.ITEM.containsKey(id)) {
-                LOGGER.warn("Unknown item \"{}\" in rules is ignored", itemId);
+                LOGGER.warn("Unknown item \"{}\" in rules is ignored", id);
                 return;
             }
             if (checkedAttributes.add(rule)) warnUnknownAttributes(rule);
 
             Item item = BuiltInRegistries.ITEM.get(id);
-            event.modify(item, builder -> applyComponents(itemId, item.components(), rule, builder));
+            event.modify(item, builder -> applyComponents(id, item.components(), rule, builder));
         });
     }
 
-    private static void applyComponents(String itemId, DataComponentMap base, EquipmentConfig.Rule rule,
+    private static void applyComponents(ResourceLocation itemId, DataComponentMap base, EquipmentConfig.Rule rule,
                                         DataComponentPatch.Builder builder) {
         int baseMaxDamage = base.getOrDefault(DataComponents.MAX_DAMAGE, 0);
 
@@ -221,9 +216,7 @@ public final class EquipmentModifier {
     }
 
     private static EquipmentConfig.Rule resolveRule(ItemStack stack) {
-        if (stack.isEmpty()) return null;
-        String itemId = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString();
-        return itemRules.get(itemId);
+        return stack.isEmpty() ? null : itemRules.get(BuiltInRegistries.ITEM.getKey(stack.getItem()));
     }
 
     private static EquipmentSlotGroup slotGroupFor(ItemStack stack) {
@@ -252,30 +245,9 @@ public final class EquipmentModifier {
     private static EquipmentConfig.Rule mergeRules(EquipmentConfig.Rule first,
                                                     EquipmentConfig.Rule second) {
         EquipmentConfig.Rule merged = new EquipmentConfig.Rule();
-        merge(merged, first);
-        merge(merged, second);
+        merged.mergeFrom(first);
+        merged.mergeFrom(second);
         return merged;
-    }
-
-    private static void merge(EquipmentConfig.Rule target, EquipmentConfig.Rule source) {
-        if (source.durability != null) target.durability = source.durability;
-        if (source.unbreakable != null) target.unbreakable = source.unbreakable;
-        if (source.maxStackSize != null) target.maxStackSize = source.maxStackSize;
-        if (source.fireResistant != null) target.fireResistant = source.fireResistant;
-        if (source.rarity != null) target.rarity = source.rarity;
-        if (source.attackDamage != null) target.attackDamage = source.attackDamage;
-        if (source.attackSpeed != null) target.attackSpeed = source.attackSpeed;
-        if (source.armor != null) target.armor = source.armor;
-        if (source.armorToughness != null) target.armorToughness = source.armorToughness;
-        if (source.knockbackResistance != null) target.knockbackResistance = source.knockbackResistance;
-        if (source.entityInteractionRange != null) target.entityInteractionRange = source.entityInteractionRange;
-        if (source.blockInteractionRange != null) target.blockInteractionRange = source.blockInteractionRange;
-        if (source.movementSpeed != null) target.movementSpeed = source.movementSpeed;
-        if (source.attackKnockback != null) target.attackKnockback = source.attackKnockback;
-        if (source.miningSpeed != null) target.miningSpeed = source.miningSpeed;
-        if (source.miningSpeedMultiplier != null) target.miningSpeedMultiplier = source.miningSpeedMultiplier;
-        if (source.durabilityMultiplier != null) target.durabilityMultiplier = source.durabilityMultiplier;
-        if (source.attributes != null) target.attributes.putAll(source.attributes);
     }
 
     private static Rarity parseRarity(String value) {
